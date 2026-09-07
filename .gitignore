@@ -1,0 +1,16 @@
+# secrets - never commit these
+.env
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# editors / os
+.idea/
+.vscode/
+.DS_Store
+
+# local logs
+*.log

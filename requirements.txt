@@ -1,0 +1,9 @@
+# Core bot
+discord.py>=2.3,<3
+psycopg[binary]>=3.1,<4
+python-dotenv>=1.0,<2
+
+# Music (wavelink talks to a SEPARATE Lavalink node; PyNaCl is for voice).
+# Safe to delete both lines if you don't want the music commands at all.
+wavelink>=3.5,<4
+PyNaCl>=1.5,<2
