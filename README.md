@@ -5,6 +5,7 @@
 **The free, self-hosted A&R demo-intake & support bot for Discord labels.**
 
 Collect demos → review them with your team → decide — all inside Discord.
+Now with a **built-in AI assistant** that can run your label for you.
 No dashboards, no subscriptions, no credit card.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -20,15 +21,36 @@ One bot token. One Python process. No other services to babysit.
 
 ---
 
+## 🆕 What's new in this update
+
+- **🤖 Built-in AI MCP server** — set one password (`MCP_PASSWORD`) and connect Claude
+  Desktop, claude.ai, Cursor or any MCP client straight to your bot. The AI can review
+  demos, manage tickets, and **create custom slash commands that go live instantly** —
+  no extra process, no dashboard, nothing to install. Connect via a simple password —
+  no Discord login, no server picker.
+- **🛠️ AI-authored custom commands** — ask your AI for a command ("make one that gives
+  the Verified role") and it's live in seconds. Full power: moderation, roles,
+  announcements, webhooks. The AI is the only reviewer and refuses only genuinely
+  serious requests; every action still respects Discord's own permissions at runtime.
+- **🎚️ `MUSIC_ENABLED` master switch** — `False` and music commands never exist and
+  Lavalink is never touched. `True` without a Lavalink node? The bot runs fine and
+  music commands simply say *"Lavalink is not configured"*.
+- **🔒 Single-server lock** — the bot now permanently binds to the first server that
+  invites it and leaves any other server. The open edition is for one label; running
+  it commercially/multi-server requires a proper fork.
+
+---
+
 ## ✨ What it does
 
 - **🎵 Demo intake** — artists hit `/submit` (or a "Submit a Demo" button), fill a small form, and their track lands as a **review card** in your private staff channel — with its own staff discussion thread.
-- **⚖️ Team decisions** — `Approve`, `Reject` (with a reason), or `DM` right from the card. The artist is notified by Discord DM instantly.
+- **⚖️ Team decisions** — `Approve`, `Reject` (with a reason), or `DM` right from the card. The artist is notified by Discord DM instantly. **Your AI assistant can do the same through MCP.**
 - **🎟️ Support tickets** — members open a ticket from a button, staff get a card + thread, and *members can reply by just DMing the bot* — replies appear in the thread.
 - **🧑‍🎤 Artist self-service** — `/my_submissions` and `/my_stats` so artists can check where they stand.
 - **🧹 Staff tooling** — `/queue`, `/recent`, and `/submission` for a clean overview, all ephemeral (nobody else sees them).
 - **🧠 Optional AI spam screening** — flag suspicious submissions with one AI key (Groq / OpenAI / SambaNova).
-- **🎶 Optional music** — `/play` a track via your own Lavalink node.
+- **🎶 Optional music** — `/play` a track via your own Lavalink node (master switch: `MUSIC_ENABLED`).
+- **🤖 AI MCP server** — Claude/any MCP client connects with one password: review demos, manage tickets, **create live custom slash commands**.
 
 ```mermaid
 flowchart LR
@@ -41,6 +63,7 @@ flowchart LR
     M[Member] -->|Ticket button| H[Staff ticket card + thread]
     H -->|Staff replies| I[Member DMs bot]
     I -.->|forwarded| H
+    AI[🤖 AI assistant] -->|MCP: decide · tickets · make commands| B
 ```
 
 > [!NOTE]
@@ -59,7 +82,12 @@ flowchart LR
 
    `Send Messages` · `Embed Links` · `Create Public Threads` · `Send Messages in Threads` · `Manage Threads` · `Read Message History` · `Use Slash Commands`
 
-5. Open the generated invite URL and add the bot to your server.
+   > Using custom commands with **moderation** actions (kick/ban/timeout)? Also add
+   > `Kick Members` · `Ban Members` · `Moderate Members` — the bot still refuses to act
+   > on anyone the command caller couldn't act on themselves.
+
+5. Open the generated invite URL and add the bot to your server. **This server becomes
+   the bot's permanent home** (single-server lock — see below).
 
 ### 2 · Grab a free Postgres URL
 
@@ -141,9 +169,103 @@ cp .env.example .env
 | `DATABASE_URL` | ✅ | Any Postgres URI (Neon / Supabase / self-hosted) |
 | `PORT` | – | HTTP port (default `7860`) |
 | `HEALTH_HOST` | – | `0.0.0.0` = public, `127.0.0.1` = local only (default `0.0.0.0`) |
+| `MUSIC_ENABLED` | – | Master music switch. `False`/`0` → music commands are **never registered** and Lavalink is never touched (default `True`) |
+| `LAVALINK_HOST/PORT/PASSWORD/SSL` | – | Music with `MUSIC_ENABLED=True`. Password missing or node unreachable → commands reply *"Lavalink is not configured"* |
+| `GUILD_ID` | – | Pin the single server this bot serves (otherwise the **first** server to invite it claims it) |
+| `MCP_PASSWORD` | – | Enables the **AI MCP server** — the password AI assistants enter to connect. Empty = MCP disabled |
 | `CHECKOUT_RECEIPT_SECRET` | – | Optional secret for the `/receipt` endpoint |
-| `LAVALINK_HOST/PORT/PASSWORD/SSL` | – | Enable music (leave `LAVALINK_PASSWORD` empty to disable) |
 | `SAMBANOVA_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | – | Enable AI spam screening (any one) |
+
+---
+
+## 🤖 AI assistant (MCP) — connect Claude to your label
+
+Set `MCP_PASSWORD=your-secret` and the bot serves a **Model Context Protocol** endpoint
+from its own HTTP server. No extra process, no Node, nothing to install.
+
+### Connect in 3 steps
+
+1. In your AI client, **add a custom connector**:
+
+   | Client | Where | URL |
+   |---|---|---|
+   | **Claude Desktop / claude.ai** | Settings → Connectors → *Add custom connector* | `http://<your-bot-host>:7860/mcp` |
+   | **Cursor** | Settings → MCP → Add server | same URL |
+   | **Any MCP client** | point it at the URL + OAuth discovery | same URL |
+
+2. A Vektra Open page opens asking for the **MCP password** — that's the whole auth
+   flow. No Discord login, no server selection (the bot is single-server anyway).
+3. Done — the connector is authorized with a proper OAuth token (PKCE, auto-refresh,
+   revocable). Tell the AI things like *"show me the queued demos"* or *"make a /verified
+   command that gives people the Verified role"*.
+
+> **https note:** some clients require https for non-localhost URLs. Put a tiny TLS
+> proxy in front (see the [FAQ](#-faq)) — config only, no code change.
+
+### What the AI can do
+
+| Tool | Action |
+|---|---|
+| `list_submissions` / `get_submission` | Browse and read demo submissions |
+| `decide_submission` | **Approve/reject** — the artist gets the same DM as a staff decision, the staff thread is updated |
+| `list_tickets` / `set_ticket_status` | Read and update support tickets |
+| `create_command` | **Create or update a custom slash command — live immediately** |
+| `list_commands` / `get_command` | Inspect commands + usage stats |
+| `set_command_enabled` / `delete_command` | Disable or remove commands |
+
+### AI-made custom commands — how they work
+
+Ask your assistant for any command and it drafts a **declarative manifest** (never code —
+the interpreter is a strict sandbox). The command goes **live on your server within
+seconds**. There is **no approval queue**: the AI itself is the reviewer and refuses only
+genuinely serious requests (illegal activity, Discord-ToS breakers, credential/password
+harvesting, phishing, prize-bait scams). Everything else — including powerful moderation,
+role management, announcements and webhooks — is fair game.
+
+Example manifest the AI might write for *"a /vibecheck command that picks one of three
+answers"*:
+
+```json
+{
+  "name": "vibecheck",
+  "description": "Get your vibe checked",
+  "parameters": [],
+  "response": { "content": "🎧 {result.pick.pick}", "ephemeral": false },
+  "actions": [
+    { "type": "random_pick", "input": "Certified vibe ✅ | Mid 😐 | Unemployed behavior 💀", "store_as": "pick" }
+  ],
+  "rate_limit": { "max_uses_per_user_hour": 5 }
+}
+```
+
+**Supported actions:** `text_reply` · `lookup_submission` · `my_submissions` ·
+`random_pick` · `show_link` · `give_role` · `remove_role` · `kick_member` · `ban_member` ·
+`timeout_member` · `announce` · `webhook_post`
+
+**Safety model (no restrictions from us — Discord enforces the rest):**
+
+- Commands are data, not code. The interpreter only knows the actions above; arbitrary
+  code can never run.
+- **Every role/moderation action is checked against the Discord permissions of whoever
+  runs the command.** A `/kick` command made by the AI still requires the *caller* to have
+  Kick Members — the bot never elevates anyone, and role hierarchy is respected.
+- Placeholders like `{param.x}` and `{result.alias.field}` are the only templating;
+  `store_as` lets actions feed each other.
+- Per-user rate limits (1–30/hour) keep spam commands in check.
+- Revoke an AI connection any time: delete its tokens (`mcp_oauth_tokens` table) or just
+  change `MCP_PASSWORD` and restart.
+
+---
+
+## 🔒 Single-server lock
+
+Vektra Open is the **free, open-source edition for one label**. The first server that
+invites the bot becomes its **permanent home** (stored in the database); any other server
+it gets invited to is left automatically with a log line. Set `GUILD_ID` to pin a
+specific server instead.
+
+> Want it multi-server or commercial? Fork and replace `core/single_server.py` — it's
+> one small file on purpose.
 
 ---
 
@@ -158,7 +280,8 @@ cp .env.example .env
 | | `/ticket_set <code> <status>` | `/status` |
 
 **Staff** = server owner or anyone with *Administrator* / *Manage Server*.
-**Music** (optional): `/play` `/skip` `/stop` `/pause` `/music_queue` `/nowplaying` `/volume` `/leave`.
+**Music** (optional, `MUSIC_ENABLED=True`): `/play` `/skip` `/stop` `/pause` `/music_queue` `/nowplaying` `/volume` `/leave`.
+**Custom commands** (via the AI MCP): your own slash commands — whatever you and the AI dream up.
 
 ---
 
@@ -169,10 +292,17 @@ vektra-open/
 ├── bot.py                    entry point — bot + slash sync + HTTP server + auto schema
 ├── core/
 │   ├── config.py             every env variable, in one place
-│   ├── database.py           single-DB layer (guild_id separates servers) + CREATE TABLE IF NOT EXISTS
+│   ├── database.py           DB layer + CREATE TABLE IF NOT EXISTS (commands, usage, MCP tokens)
 │   ├── ui.py                 review cards, decision buttons, modals, ticket views
+│   ├── single_server.py      one-server lock (fork to run multi-server)
 │   └── moderation.py         optional AI spam screening
-├── cogs/                     admin · submissions · tickets · music
+├── mcp/                      built-in AI MCP server
+│   ├── common.py             token lifecycle, PKCE, OAuth pages
+│   ├── http_api.py           routing: /mcp + /oauth/* + /.well-known
+│   └── tools.py              the 10 AI tools + manifest validation
+├── cogs/
+│   ├── admin.py · submissions.py · tickets.py · music.py
+│   └── custom_commands.py    interprets AI-made commands (sandboxed, permission-gated)
 ├── utils/helpers.py          text formatting helpers
 ├── db/migrations/            optional manual migration
 ├── .env.example
@@ -181,10 +311,11 @@ vektra-open/
 
 **Why it fits a 150 MB VPS**
 
-- One Python process. No worker queues, no Redis, no bundled databases.
+- One Python process. No worker queues, no Redis, no bundled databases. The MCP server
+  lives inside the bot's existing HTTP server — zero extra processes.
 - Music talks to a **separate** Lavalink node — never install it on the bot's box.
-- Every guild shares one Postgres; rows are separated by `guild_id`.
-- AI screening only makes network calls when you configure a key.
+- One Postgres database. This edition is **single-server** (see the lock above).
+- AI screening and the MCP server only make network calls when you configure them.
 
 **HTTP endpoints** (`PORT`, default 7860)
 
@@ -193,6 +324,10 @@ vektra-open/
 | `GET /health` | Plain-text heartbeat for uptime monitors |
 | `GET /callback?token=…` | Completion-callback stub (log + acknowledge — extend to your own flow) |
 | `GET /receipt?order_ref=…&secret=…` | Receipt endpoint stub for checkout sites (guarded by `CHECKOUT_RECEIPT_SECRET`) |
+| `POST /mcp` | **AI MCP JSON-RPC endpoint** (Bearer token required) |
+| `GET/POST /oauth/authorize` | MCP connector authorize page (asks for `MCP_PASSWORD`) |
+| `POST /oauth/token` · `/oauth/revoke` | MCP token issuance (PKCE + refresh rotation) / revocation |
+| `GET /.well-known/oauth-authorization-server` | RFC 8414 metadata so MCP clients auto-discover the flow |
 
 ---
 
@@ -205,15 +340,35 @@ Yes. Python + discord.py idles around **60–90 MB**. Just don't run Lavalink, R
 </details>
 
 <details>
-<summary><b>Can multiple servers use the same bot + database?</b></summary>
+<summary><b>Can multiple servers use the same bot?</b></summary>
 
-Yes — data is separated by `guild_id`. Each server runs `/setup_staff` and `/setup_ticket_channel` for its own channels.
+No — this edition is **single-server on purpose**: the first server to invite the bot claims it forever, and any other server is left automatically (pin one with `GUILD_ID`). The open edition isn't meant for commercial/multi-tenant use; fork and replace <code>core/single_server.py</code> if you need that.
+</details>
+
+<details>
+<summary><b>My AI client refuses the http:// connector URL. What do I do?</b></summary>
+
+Some clients require https for remote connectors. Put a tiny Caddy reverse proxy in front:
+
+```
+mcp.yourdomain.com {
+    reverse_proxy localhost:7860
+}
+```
+
+Then use `https://mcp.yourdomain.com/mcp` as the connector URL. Config only — no code change.
 </details>
 
 <details>
 <summary><b>How do artists reply to staff?</b></summary>
 
-**Tickets**: members DM the bot and replies are forwarded into the staff thread. **Submissions**: staff DM artists from the card; decisions notify artists automatically by DM.
+**Tickets**: members DM the bot and replies are forwarded into the staff thread. **Submissions**: staff DM artists from the card; decisions (staff or AI) notify artists automatically by DM.
+</details>
+
+<details>
+<summary><b>Is it safe to let an AI create commands?</b></summary>
+
+The AI can only assemble commands from a fixed set of building-block actions — it can never run code. Moderation and role actions are **always checked against the Discord permissions of the person invoking the command**, and role hierarchy applies, so an AI-made `/ban` is exactly as powerful as a staff-made `/ban`: nothing is elevated. If you ever feel uneasy, change `MCP_PASSWORD` (kills the tokens) and disable the command from Discord or the `custom_commands` table.
 </details>
 
 <details>
@@ -232,9 +387,11 @@ No — `core/database.py` runs `CREATE TABLE IF NOT EXISTS` on startup. The `.sq
 
 ## 🔒 Security notes
 
-- `.env` is gitignored — **never commit your token or DB credentials**.
+- `.env` is gitignored — **never commit your token, DB credentials, or `MCP_PASSWORD`**.
 - Use `sslmode=require` with managed Postgres.
-- Expose `PORT` only to what needs it; protect `/receipt` with `CHECKOUT_RECEIPT_SECRET` if it's public.
+- `MCP_PASSWORD` is the key to your whole label through the AI — make it long and unique.
+- MCP tokens are stored **hashed**, auto-expire (access 4 h, refresh 30 d, rotated on every refresh), and are revocable by changing the password.
+- Expose `PORT` only to what needs it; protect `/receipt` with `CHECKOUT_RECEIPT_SECRET` if it's public. Prefer https via a reverse proxy for the MCP endpoint.
 - If AI screening is on, submission text is sent to the provider you chose — make sure that's acceptable for your label.
 
 ---

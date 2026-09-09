@@ -10,6 +10,7 @@ Every function opens its own short connection. On a managed Postgres
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 from datetime import datetime, timezone
@@ -72,6 +73,52 @@ create index if not exists submissions_guild_status_idx on submissions (guild_id
 create index if not exists submissions_guild_artist_idx on submissions (guild_id, artist_id);
 create index if not exists tickets_guild_status_idx on tickets (guild_id, status);
 create index if not exists tickets_user_open_idx on tickets (user_id) where status <> 'Resolved';
+
+create table if not exists custom_commands (
+    id            bigint generated always as identity primary key,
+    guild_id      bigint not null,
+    name          text not null,
+    manifest      jsonb not null,
+    enabled       boolean not null default true,
+    created_by    text not null default 'mcp',
+    created_at    timestamptz not null default now(),
+    updated_at    timestamptz not null default now(),
+    unique (guild_id, name)
+);
+
+create table if not exists custom_command_usage (
+    id           bigint generated always as identity primary key,
+    guild_id     bigint not null,
+    command_name text not null,
+    user_id      bigint not null,
+    used_at      timestamptz not null default now()
+);
+
+create index if not exists custom_command_usage_lookup_idx
+    on custom_command_usage (guild_id, command_name, user_id, used_at);
+
+create table if not exists mcp_oauth_tokens (
+    token_hash         text primary key,
+    refresh_token_hash text unique,
+    created_at         timestamptz not null default now(),
+    expires_at         timestamptz not null,
+    refresh_expires_at timestamptz not null,
+    last_used_at       timestamptz
+);
+
+create table if not exists mcp_oauth_codes (
+    code_hash      text primary key,
+    redirect_uri   text not null,
+    code_challenge text not null,
+    expires_at     timestamptz not null,
+    used           boolean not null default false,
+    created_at     timestamptz not null default now()
+);
+
+create table if not exists bot_state (
+    key   text primary key,
+    value text not null
+);
 """
 
 
@@ -423,3 +470,201 @@ def open_ticket_for_dm(user_id: int) -> dict | None:
             """,
             (user_id,),
         ).fetchone()
+
+
+# ── single-server lock (bot_state) ─────────────────────────────────────
+
+def get_state(key: str) -> str | None:
+    with _connect() as conn:
+        row = conn.execute("select value from bot_state where key = %s", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_state(key: str, value: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            insert into bot_state (key, value) values (%s, %s)
+            on conflict (key) do update set value = excluded.value
+            """,
+            (key, value),
+        )
+
+
+# ── custom commands (authored via the AI MCP) ────────────────────────
+
+def upsert_custom_command(guild_id: int, name: str, manifest: dict, *, created_by: str = "mcp") -> None:
+    now = _now()
+    with _connect() as conn:
+        conn.execute(
+            """
+            insert into custom_commands (guild_id, name, manifest, created_by, created_at, updated_at)
+            values (%s, %s, %s, %s, %s, %s)
+            on conflict (guild_id, name) do update set
+                manifest = excluded.manifest,
+                enabled = true,
+                updated_at = excluded.updated_at
+            """,
+            (guild_id, name.lower(), json.dumps(manifest), created_by, now, now),
+        )
+
+
+def set_custom_command_enabled(guild_id: int, name: str, enabled: bool) -> bool:
+    with _connect() as conn:
+        cur = conn.execute(
+            "update custom_commands set enabled = %s, updated_at = %s where guild_id = %s and name = %s",
+            (enabled, _now(), guild_id, name.lower()),
+        )
+        return cur.rowcount > 0
+
+
+def delete_custom_command(guild_id: int, name: str) -> bool:
+    with _connect() as conn:
+        cur = conn.execute(
+            "delete from custom_commands where guild_id = %s and name = %s",
+            (guild_id, name.lower()),
+        )
+        return cur.rowcount > 0
+
+
+def get_custom_command(guild_id: int, name: str) -> dict | None:
+    with _connect() as conn:
+        return conn.execute(
+            "select * from custom_commands where guild_id = %s and name = %s",
+            (guild_id, name.lower()),
+        ).fetchone()
+
+
+def list_custom_commands(guild_id: int) -> list[dict]:
+    with _connect() as conn:
+        return conn.execute(
+            "select * from custom_commands where guild_id = %s order by name",
+            (guild_id,),
+        ).fetchall()
+
+
+def list_enabled_custom_commands() -> list[dict]:
+    with _connect() as conn:
+        return conn.execute(
+            "select guild_id, name, manifest from custom_commands where enabled = true order by guild_id, name"
+        ).fetchall()
+
+
+def check_and_record_command_usage(guild_id: int, name: str, user_id: int, max_per_hour: int) -> bool:
+    """Return False when the user hit the manifest's hourly rate limit."""
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                select count(*) as n from custom_command_usage
+                where guild_id = %s and command_name = %s and user_id = %s
+                  and used_at > now() - interval '1 hour'
+                """,
+                (guild_id, name.lower(), user_id),
+            ).fetchone()
+            if row and int(row["n"]) >= max_per_hour:
+                return False
+            conn.execute(
+                "insert into custom_command_usage (guild_id, command_name, user_id) values (%s, %s, %s)",
+                (guild_id, name.lower(), user_id),
+            )
+        return True
+    except Exception:
+        logger.exception("Custom command rate check failed; allowing use.")
+        return True
+
+
+def custom_command_usage_summary(guild_id: int, name: str) -> dict:
+    with _connect() as conn:
+        day = conn.execute(
+            """
+            select count(*) as n from custom_command_usage
+            where guild_id = %s and command_name = %s and used_at > now() - interval '24 hours'
+            """,
+            (guild_id, name.lower()),
+        ).fetchone()
+        total = conn.execute(
+            "select count(*) as n from custom_command_usage where guild_id = %s and command_name = %s",
+            (guild_id, name.lower()),
+        ).fetchone()
+    return {"last_24h": int(day["n"]) if day else 0, "total": int(total["n"]) if total else 0}
+
+
+# ── MCP OAuth tokens / codes ─────────────────────────────────────────────
+
+def insert_mcp_auth_code(code_hash: str, redirect_uri: str, code_challenge: str, ttl_seconds: int) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            insert into mcp_oauth_codes (code_hash, redirect_uri, code_challenge, expires_at)
+            values (%s, %s, %s, now() + (%s::int * interval '1 second'))
+            """,
+            (code_hash, redirect_uri, code_challenge, ttl_seconds),
+        )
+
+
+def take_mcp_auth_code(code_hash: str) -> dict | None:
+    """Return the code row if valid and unused, marking it used."""
+    with _connect() as conn:
+        row = conn.execute(
+            "select * from mcp_oauth_codes where code_hash = %s", (code_hash,)
+        ).fetchone()
+        if not row or row["used"] or row["expires_at"] < _now():
+            return None
+        conn.execute("update mcp_oauth_codes set used = true where code_hash = %s", (code_hash,))
+    return row
+
+
+def insert_mcp_tokens(token_hash: str, refresh_hash: str | None, access_ttl: int, refresh_ttl: int) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            insert into mcp_oauth_tokens
+                (token_hash, refresh_token_hash, expires_at, refresh_expires_at)
+            values (%s, %s, now() + (%s::int * interval '1 second'),
+                    now() + (%s::int * interval '1 second'))
+            """,
+            (token_hash, refresh_hash, access_ttl, refresh_ttl),
+        )
+
+
+def get_mcp_token(token_hash: str) -> dict | None:
+    """Valid (unexpired) access token row, touching last_used_at."""
+    with _connect() as conn:
+        row = conn.execute(
+            "select * from mcp_oauth_tokens where token_hash = %s", (token_hash,)
+        ).fetchone()
+        if not row or row["expires_at"] < _now():
+            return None
+        conn.execute("update mcp_oauth_tokens set last_used_at = now() where token_hash = %s", (token_hash,))
+    return row
+
+
+def rotate_mcp_token(old_refresh_hash: str, token_hash: str, refresh_hash: str, access_ttl: int, refresh_ttl: int) -> bool:
+    """Replace the token pair bound to a refresh token. False when stale/unknown."""
+    with _connect() as conn:
+        row = conn.execute(
+            "select refresh_token_hash, refresh_expires_at from mcp_oauth_tokens where refresh_token_hash = %s",
+            (old_refresh_hash,),
+        ).fetchone()
+        if not row or row["refresh_expires_at"] < _now():
+            return False
+        conn.execute("delete from mcp_oauth_tokens where refresh_token_hash = %s", (old_refresh_hash,))
+        conn.execute(
+            """
+            insert into mcp_oauth_tokens
+                (token_hash, refresh_token_hash, expires_at, refresh_expires_at)
+            values (%s, %s, now() + (%s::int * interval '1 second'),
+                    now() + (%s::int * interval '1 second'))
+            """,
+            (token_hash, refresh_hash, access_ttl, refresh_ttl),
+        )
+    return True
+
+
+def delete_mcp_token_by_refresh(refresh_hash: str) -> bool:
+    with _connect() as conn:
+        cur = conn.execute(
+            "delete from mcp_oauth_tokens where refresh_token_hash = %s", (refresh_hash,)
+        )
+        return cur.rowcount > 0

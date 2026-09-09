@@ -59,4 +59,52 @@ create index if not exists submissions_guild_artist_idx on submissions (guild_id
 create index if not exists tickets_guild_status_idx on tickets (guild_id, status);
 create index if not exists tickets_user_open_idx on tickets (user_id) where status <> 'Resolved';
 
+-- ── AI MCP: custom commands, usage, OAuth ────────────────────────────────────
+
+create table if not exists custom_commands (
+    id            bigint generated always as identity primary key,
+    guild_id      bigint not null,
+    name          text not null,
+    manifest      jsonb not null,
+    enabled       boolean not null default true,
+    created_by    text not null default 'mcp',
+    created_at    timestamptz not null default now(),
+    updated_at    timestamptz not null default now(),
+    unique (guild_id, name)
+);
+
+create table if not exists custom_command_usage (
+    id           bigint generated always as identity primary key,
+    guild_id     bigint not null,
+    command_name text not null,
+    user_id      bigint not null,
+    used_at      timestamptz not null default now()
+);
+
+create index if not exists custom_command_usage_lookup_idx
+    on custom_command_usage (guild_id, command_name, user_id, used_at);
+
+create table if not exists mcp_oauth_tokens (
+    token_hash         text primary key,
+    refresh_token_hash text unique,
+    created_at         timestamptz not null default now(),
+    expires_at         timestamptz not null,
+    refresh_expires_at timestamptz not null,
+    last_used_at       timestamptz
+);
+
+create table if not exists mcp_oauth_codes (
+    code_hash      text primary key,
+    redirect_uri   text not null,
+    code_challenge text not null,
+    expires_at     timestamptz not null,
+    used           boolean not null default false,
+    created_at     timestamptz not null default now()
+);
+
+create table if not exists bot_state (
+    key   text primary key,
+    value text not null
+);
+
 commit;

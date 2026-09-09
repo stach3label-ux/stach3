@@ -13,7 +13,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from core.config import LAVALINK_PASSWORD, MAX_TRACKS_PER_REQUEST
+from core.config import MAX_TRACKS_PER_REQUEST
 from utils.helpers import format_duration
 
 logger = logging.getLogger("vektra-open.music")
@@ -28,6 +28,8 @@ except ImportError:  # pragma: no cover
 
 class MusicCog(commands.Cog, name="Music"):
     """Play music from YouTube - requires the server owner to run a Lavalink node."""
+
+    NOT_CONFIGURED_MSG = "🎵 Music is unavailable - Lavalink is not configured on this bot."
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -118,20 +120,8 @@ class MusicCog(commands.Cog, name="Music"):
     @app_commands.command(name="play", description="Play a song or search YouTube")
     @app_commands.describe(query="YouTube URL or search query")
     async def play(self, interaction: discord.Interaction, query: str):
-        if not WAVELINK_AVAILABLE:
-            await interaction.response.send_message("Music is disabled (wavelink is not installed).", ephemeral=True)
-            return
-        if not LAVALINK_PASSWORD:
-            await interaction.response.send_message(
-                "Music is disabled - the server owner has not configured a Lavalink node.",
-                ephemeral=True,
-            )
-            return
-        if not self._node_ready():
-            await interaction.response.send_message(
-                "Lavalink is not connected yet. Try again in a few seconds.",
-                ephemeral=True,
-            )
+        if not WAVELINK_AVAILABLE or not self._node_ready():
+            await interaction.response.send_message(self.NOT_CONFIGURED_MSG, ephemeral=True)
             return
         if not await self._ensure_voice(interaction):
             return

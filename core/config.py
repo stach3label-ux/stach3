@@ -47,6 +47,32 @@ LAVALINK_IDENTIFIER = os.getenv("LAVALINK_IDENTIFIER", "vektra-open").strip()
 LAVALINK_SSL = os.getenv("LAVALINK_SSL", "0").lower() not in {"0", "false", "no"}
 MAX_TRACKS_PER_REQUEST = 10
 
+# Master music switch. True (default) = load music commands and look for
+# Lavalink; False = the music cog is never loaded and Lavalink is never touched.
+MUSIC_ENABLED = os.getenv("MUSIC_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+# ── single-server lock (open-source edition is not for commercial use) ──────
+# The bot permanently binds itself to the first server it joins (or to this
+# guild when set). Any other server is left automatically. Multi-server /
+# commercial use requires a proper fork.
+try:
+    GUILD_ID = int(os.getenv("GUILD_ID", "0"))
+except ValueError:
+    GUILD_ID = 0
+
+# ── AI MCP server (optional) ─────────────────────────────────────────────────
+# When MCP_PASSWORD is set, the bot serves a Model Context Protocol endpoint at
+# http://<host>:<PORT>/mcp. AI assistants connect through the OAuth connector
+# flow where the user just enters this password — no Discord login, no server
+# selection (the bot is single-server). Leave empty to disable the MCP server.
+MCP_PASSWORD = os.getenv("MCP_PASSWORD", "").strip()
+# Access tokens 4h, refresh tokens 30d, authorization codes 10 min.
+MCP_ACCESS_TOKEN_TTL = 4 * 60 * 60
+MCP_REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60
+MCP_AUTH_CODE_TTL = 10 * 60
+MCP_NAME = "vektra-open"
+MCP_VERSION = "1.0.0"
+
 # ── AI spam screening (fully optional; one key is enough) ───────────────────
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions").strip()

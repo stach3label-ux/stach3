@@ -23,19 +23,24 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from mcp import http_api as mcp_http
+
 from core import database as store
-from core import ui
+from core import single_server, ui
 from core.config import (
     CHECKOUT_RECEIPT_SECRET,
     DATABASE_URL,
     DEFAULT_PRESENCE_TEXT,
     DISCORD_BOT_TOKEN,
+    GUILD_ID,
     HEALTH_HOST,
     LAVALINK_HOST,
     LAVALINK_IDENTIFIER,
     LAVALINK_PASSWORD,
     LAVALINK_PORT,
     LAVALINK_SSL,
+    MCP_PASSWORD,
+    MUSIC_ENABLED,
     PORT,
 )
 
@@ -59,12 +64,37 @@ class HealthRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _form(self) -> dict:
+        """Parse an application/x-www-form-urlencoded body (OAuth posts)."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0:
+            return {}
+        raw = self.rfile.read(min(length, 1_000_000)).decode("utf-8", "replace")
+        try:
+            return {k: v[0] for k, v in parse_qs(raw, keep_blank_values=True).items()}
+        except ValueError:
+            return {}
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
 
         if path in {"/", "/health"}:
             self._send(b"Vektra Open Discord bot is running.\n")
+            return
+
+        # ── AI MCP server (OAuth connector flow + JSON-RPC endpoint) ──
+        if path == "/.well-known/oauth-authorization-server":
+            mcp_http.handle_mcp_well_known(self)
+            return
+        if path == "/oauth/authorize":
+            mcp_http.handle_authorize_get(self, {k: v[0] for k, v in parse_qs(parsed.query).items()})
+            return
+        if path == "/mcp":
+            mcp_http.handle_mcp_get(self)
             return
 
         if path == "/callback":
@@ -94,6 +124,23 @@ class HealthRequestHandler(BaseHTTPRequestHandler):
         self._send(b"Not Found\n", status=404)
 
     def do_POST(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        # ── AI MCP server ─────────────────────────────────────────────
+        if path == "/oauth/authorize":
+            mcp_http.handle_authorize_post(self, self._form())
+            return
+        if path == "/oauth/token":
+            mcp_http.handle_token_post(self, self._form())
+            return
+        if path == "/oauth/revoke":
+            mcp_http.handle_revoke_post(self, self._form())
+            return
+        if path == "/mcp":
+            mcp_http.handle_mcp_post(self)
+            return
+
         self._send(b"Not Found\n", status=404)
 
 
@@ -118,7 +165,17 @@ class VektraBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents, help_command=None)
 
     async def setup_hook(self):
-        for cog in ("cogs.admin", "cogs.submissions", "cogs.tickets", "cogs.music"):
+        cogs = ["cogs.admin", "cogs.submissions", "cogs.tickets"]
+        # MUSIC_ENABLED=False keeps music commands from ever registering and
+        # leaves Lavalink alone entirely.
+        if MUSIC_ENABLED:
+            cogs.append("cogs.music")
+        else:
+            logger.info("MUSIC_ENABLED is false - skipping music commands entirely.")
+        # Custom commands (authored via the AI MCP) - only useful when the MCP
+        # server is on, but harmless otherwise (the table just stays empty).
+        cogs.append("cogs.custom_commands")
+        for cog in cogs:
             try:
                 await self.load_extension(cog)
                 logger.info("Loaded extension %s", cog)
@@ -131,28 +188,31 @@ class VektraBot(commands.Bot):
         self.add_view(ui.SubmitPanelView())
         self.add_view(ui.SupportTicketPanelView())
 
-        if LAVALINK_PASSWORD:
-            try:
-                import wavelink
-            except ImportError:
-                logger.warning("LAVALINK_PASSWORD is set but wavelink is not installed; music disabled.")
+        if MUSIC_ENABLED:
+            if not LAVALINK_PASSWORD:
+                logger.warning("MUSIC_ENABLED is true but Lavalink is not configured (LAVALINK_PASSWORD missing). Music commands will report 'Lavalink is not configured'.")
             else:
-                node_uri = f"{'https' if LAVALINK_SSL else 'http'}://{LAVALINK_HOST}:{LAVALINK_PORT}"
                 try:
-                    await asyncio.wait_for(
-                        wavelink.Pool.connect(
-                            nodes=[wavelink.Node(identifier=LAVALINK_IDENTIFIER, uri=node_uri, password=LAVALINK_PASSWORD)],
-                            client=self,
-                        ),
-                        timeout=15,
-                    )
-                    logger.info("Connected Lavalink node %s at %s.", LAVALINK_IDENTIFIER, node_uri)
-                except asyncio.TimeoutError:
-                    logger.warning("Timed out connecting Lavalink node at %s.", node_uri)
-                except Exception:
-                    logger.exception("Failed to connect Lavalink node at %s.", node_uri)
+                    import wavelink
+                except ImportError:
+                    logger.warning("LAVALINK_PASSWORD is set but wavelink is not installed; music disabled.")
+                else:
+                    node_uri = f"{'https' if LAVALINK_SSL else 'http'}://{LAVALINK_HOST}:{LAVALINK_PORT}"
+                    try:
+                        await asyncio.wait_for(
+                            wavelink.Pool.connect(
+                                nodes=[wavelink.Node(identifier=LAVALINK_IDENTIFIER, uri=node_uri, password=LAVALINK_PASSWORD)],
+                                client=self,
+                            ),
+                            timeout=15,
+                        )
+                        logger.info("Connected Lavalink node %s at %s.", LAVALINK_IDENTIFIER, node_uri)
+                    except asyncio.TimeoutError:
+                        logger.warning("Timed out connecting Lavalink node at %s; music commands will report 'Lavalink is not configured'.", node_uri)
+                    except Exception:
+                        logger.exception("Failed to connect Lavalink node at %s.", node_uri)
         else:
-            logger.info("LAVALINK_PASSWORD not set - music commands will report disabled.")
+            logger.info("MUSIC_ENABLED is false - Lavalink is not being used.")
 
         command_names = ", ".join(command.name for command in self.tree.get_commands())
         logger.info("Registering global slash commands: %s", command_names)
@@ -166,11 +226,43 @@ bot = VektraBot()
 @bot.event
 async def on_ready():
     logger.info("Vektra Open is online as %s in %s guild(s).", bot.user, len(bot.guilds))
+
+    # Single-server lock: bind to the configured/first server and leave any others.
+    locked = await single_server.claim_first_guild(bot, store, GUILD_ID)
+    from mcp import tools as mcp_tools
+    mcp_tools.bind_bot(bot)
+    mcp_tools.set_locked_guild(locked)
+
     activity = discord.Activity(type=discord.ActivityType.listening, name=DEFAULT_PRESENCE_TEXT)
     try:
         await bot.change_presence(activity=activity)
     except discord.HTTPException:
         logger.warning("Could not update presence.")
+
+
+@bot.event
+async def on_guild_join(guild: discord.Guild):
+    locked_raw = store.get_state(single_server.LOCK_KEY)
+    try:
+        locked = int(locked_raw or 0) or int(GUILD_ID or 0)
+    except (TypeError, ValueError):
+        locked = int(GUILD_ID or 0)
+    if not locked:
+        # First server to invite the bot claims the lock.
+        store.set_state(single_server.LOCK_KEY, str(guild.id))
+        logger.info("Single-server mode: bound to %s (%s).", guild.name, guild.id)
+        locked = guild.id
+    elif guild.id != locked:
+        logger.warning(
+            "Single-server mode: leaving guild %s (%s) - this bot is bound to server %s.",
+            guild.name,
+            guild.id,
+            locked,
+        )
+        try:
+            await guild.leave()
+        except Exception:
+            logger.exception("Failed to leave guild %s.", guild.id)
 
 
 @bot.event
@@ -228,6 +320,10 @@ async def main() -> None:
         logger.exception("Database schema setup failed - check DATABASE_URL and connectivity.")
 
     start_http_server()
+    if MCP_PASSWORD:
+        logger.info("AI MCP server enabled: connect assistants to http://<this-host>:%s/mcp (password auth).", PORT)
+    else:
+        logger.info("MCP_PASSWORD is not set - the AI MCP server is disabled.")
     await bot.start(DISCORD_BOT_TOKEN)
 
 
