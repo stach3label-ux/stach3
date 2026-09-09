@@ -44,7 +44,7 @@ flowchart LR
 ```
 
 > [!NOTE]
-> Vektra Open is the **free, open-source edition** of [Vektra](https://github.com/Dap69420/labelutils) — a full product with hosted dashboards, Pro tiers, white-label identity, AI audio critique and more. This repo keeps the core that a label actually needs, small enough for a free VPS. MIT licensed — take it, run it, fork it.
+> Vektra Open is the **free, open-source edition** of [Vektra](https://vektra.games) — a full product with hosted dashboards, Pro tiers, white-label identity, AI audio critique and more. This repo keeps the core that a label actually needs, small enough for a free VPS. MIT licensed — take it, run it, fork it.
 
 ---
 
